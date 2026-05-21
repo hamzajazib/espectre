@@ -109,11 +109,11 @@ act -j build --matrix chip:"QEMU ESP32-C3" -P ubuntu-latest=catthehacker/ubuntu:
 
 | Chip | Architecture | QEMU Machine |
 |------|--------------|--------------|
+| ESP32 | Xtensa | esp32 |
 | ESP32-S3 | Xtensa | esp32s3 |
 | ESP32-C3 | RISC-V | esp32c3 |
-| ESP32-C6 | RISC-V | esp32c6 |
 
-> Note: ESP32 original is excluded - QEMU doesn't emulate PHY registers correctly, causing false crashes.
+> Note: WiFi PHY is not fully emulated by QEMU. The CI smoke test filters the known PHY assert so boot regressions still surface without failing on emulator limitations.
 
 > **Note**: Smoke tests appear as "Smoke Test ESP32-C3" etc. in CI.
 

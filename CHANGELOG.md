@@ -4,59 +4,59 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [2.8.0] - in progress - Detection quality hardening, ML cross-chip robustness, and CI security
+## [2.8.0] - 2026-05-21 - Detection hardening, ML cross-chip reliability, and runtime motion policy
 
 ### Highlights
 
-- **Detection quality and calibration robustness improved across stacks**: NBVI now uses multi-strategy band selection with stricter defaults, aligned adaptive validation, tighter hint-band fallback, unified 12-subcarrier defaults, and a curated validation dataset.
-- **ML reliability improved on cross-chip generalization**: all per-chip datasets were recollected from scratch with stricter quality controls; training now uses chip-aware grouped validation, hard-positive mining, updated features, retrained weights aligned with the default runtime filter chain, and a more gradual temperature-scaled Movement Score for Home Assistant.
-- **Security and CI governance hardened**: CodeQL and DCO enforcement were added, workflow permissions were tightened, and emulated-target CI was stabilized and simplified.
-- **New S3 display-board profile**: added a dedicated `ESP32-S3 Touch LCD 1.47"` example with tuned display settings and on-device motion status output.
+- **Detection and calibration hardened across stacks**: multi-strategy NBVI band selection, Hampel on by default, stricter NBVI defaults, conservative hint-band fallback, unified 12-subcarrier defaults, and a 100-packet detection window.
+- **Runtime motion policy aligned between firmware and Micro-ESPectre**: edge-driven binary motion publish, configurable `motion_on_hits` / `motion_off_hits` (default `3` / `3`), and `evaluation_interval` decoupled from `publish_interval`.
+- **ML detector reliability improved on all chips**: datasets recollected, chip-grouped training, updated 9-feature model (`9 -> 32 -> 16 -> 1`), Hampel-aligned weights, raw-std features for ML, and a more gradual temperature-scaled Movement Score for Home Assistant.
+- **Traffic generator defaults to `ping`**: ICMP ping replaces DNS as the default CSI traffic source on both ESPHome and Micro-ESPectre (`dns` remains available).
 
-### Runtime and algorithm changes (highest impact)
+### Detection and calibration
 
-- **Traffic generator now defaults to `ping` across Python and C++**: both Micro-ESPectre and the ESPHome component now use ICMP ping as the default CSI traffic source instead of DNS, improving compatibility with routers that ignore or rate-limit root-domain DNS queries while keeping `dns` available as an explicit alternative.
-- **Hampel now enabled by default**: `hampel_enabled=true` with threshold `5.0 MAD` (from `4.0`) to suppress extreme spikes while preserving motion sensitivity.
-- **NBVI strategy selection expanded**: each window evaluates four candidates (Entropy Spaced, MAD Clustered, Classic Spaced, Classic Clustered) and selects the lowest-FP option; scoring now exposes `nbvi_classic`, `nbvi_entropy`, and `nbvi_mad`.
-- **ML Movement Score is now more gradual**: the published ML metric now uses temperature scaling before the sigmoid so Home Assistant sees intermediate values instead of an almost pure 0/10 on-off signal. The default 5.0 threshold remains the binary decision boundary, so detection behavior and validation targets stay unchanged while the score becomes more informative for dashboards and automations.
-- **Motion binary publish path is now centralized and edge-driven**: Home Assistant motion state changes are emitted immediately on `IDLE <-> MOTION` transitions instead of waiting for the periodic metric publish cadence, and the new `motion_on_hits` / `motion_off_hits` options allow configurable consecutive-hit filtering without duplicating logic across MVS and ML detectors. Defaults are now `3 / 3`.
-- **Detector evaluation cadence is now configurable and decoupled from periodic publishing**: runtime state updates now run on a separate `evaluation_interval` (default `25` packets), while periodic metric/log publication still follows `publish_interval`.
-- **Micro-ESPectre runtime is aligned with the firmware cadence/filter model**: the Python device loop now applies the same decoupled `evaluation_interval` plus `motion_on_hits` / `motion_off_hits` filtering before publishing MQTT state, `info` reports the new runtime knobs, and `./me deploy` now includes the new `runtime_policy.py` module.
-- **Default detection window increased to 100 packets**: the shared runtime default (`DETECTOR_DEFAULT_WINDOW_SIZE` / `SEG_WINDOW_SIZE`) now uses a 100-packet window, with regenerated ML artifacts and aligned docs.
+- **Traffic generator default is `ping`**: improves compatibility with routers that ignore or rate-limit root-domain DNS queries.
+- **Hampel enabled by default** (`hampel_enabled=true`, threshold `5.0` MAD).
+- **NBVI selects the lowest-FP band among four strategies** per window (Entropy Spaced, MAD Clustered, Classic Spaced, Classic Clustered); scoring exposes `nbvi_classic`, `nbvi_entropy`, and `nbvi_mad`.
+- **NBVI defaults tightened**: `alpha` `0.75`, `percentile` `5`, `noise_gate_percentile` `15`; calibration FP uses the runtime adaptive threshold (`P95 x 1.1`).
+- **Hint-band fallback is more conservative**: keeps the current/default band when both candidates already meet the `<=5%` FP target and the hint is not meaningfully worse.
+- **Default detection window is 100 packets** (`DETECTOR_DEFAULT_WINDOW_SIZE` / `SEG_WINDOW_SIZE`).
+- **Motion state is edge-driven and filterable**: binary `IDLE <-> MOTION` transitions publish immediately; `motion_on_hits` / `motion_off_hits` apply consecutive-hit filtering to both MVS and ML (default `3` / `3`).
+- **`evaluation_interval` decoupled from `publish_interval`**: detector evaluation defaults to every `25` packets; metric/log publishing keeps its own cadence.
+- **Micro-ESPectre runtime matches firmware policy**: same evaluation/hit filtering before MQTT publish; `info` reports the new knobs; `./me deploy` ships `runtime_policy.py`.
+- **Micro-ESPectre per-packet overhead reduced** for ML and MVS on device.
 
-- **NBVI defaults and validation tightened**: `alpha` 0.5->0.75, `percentile` 10->5, `noise_gate_percentile` 25->15; calibration FP is now measured with the runtime-consistent adaptive threshold (`P95 x 1.1`).
-- **Hint-band fallback made conservative**: hint/current band is now also kept when both the calibrated candidate and the hint/default band already satisfy the <=5% FP target and the hint is not meaningfully worse on that proxy. This prevents over-conservative NBVI bands from replacing a known-good default on datasets such as ESP32-C5.
-- **Python/C++ real-data pairing aligned**: the native C++ test harness now uses full ISO timestamps including fractional seconds when choosing nearest baseline/movement pairs, matching the Python path and removing false regressions caused by second-level truncation.
+### ML detector
 
-### ML and dataset pipeline
+- **ML uses raw turbulence std, not CV normalization**: fixes ESP32 feature-scale mismatch with gain-locked chips; CV normalization remains MVS-only.
+- **Movement Score is more gradual for Home Assistant**: temperature scaling before sigmoid; default threshold `5.0` unchanged for binary detection.
+- **Production model refreshed**: 9 inputs (`turb_mean`, `turb_std`, `turb_max`, `turb_min`, `turb_iqr`, `turb_skewness`, `turb_autocorr`, `turb_mad`, `waveform_length`); topology `9 -> 32 -> 16 -> 1`; weights retrained on Hampel-filtered input.
+- **Training pipeline hardened**: `StratifiedGroupKFold` by chip, stratified internal validation, hard-positive mining for near-threshold motion.
+- **Per-chip datasets recollected** under stricter quality controls (gain-locked, 128 SC HT20, balanced baseline/motion); used for NBVI validation, MVS tests, and ML training.
 
-- **CV normalization disabled for ML**: MLDetector now always uses raw std (`σ`) for spatial turbulence, regardless of `gain_locked` status. CV normalization (`σ/μ`) remains active only for MVS. This fixes a distribution mismatch where ESP32 (gain_locked=false) produced CV-normalized features (~0.05-0.15) incompatible with the raw std scale (~2-8) used by gain-lock chips, corrupting the StandardScaler and degrading ESP32 ML recall to ~11%. With this fix, ESP32 ML reaches 99.6% recall / 0.2% FP (F1 99.7%) in Python validation while all supported chips stay above 99% ML F1.
-- **Training leakage protections added**: CV moved from `StratifiedKFold` to `StratifiedGroupKFold` (grouped by chip), and internal validation split is explicitly stratified.
-- **Hard-positive mining added**: subtle near-threshold motion samples are up-weighted to improve worst-chip recall.
-- **Feature set refreshed**: `turb_delta` was replaced by `waveform_length`, and the latest long-run tuning swapped `turb_zcr` for `turb_iqr` to reduce quiet-window false positives while preserving recall across chips.
-- **ML feature set trimmed for holdout robustness**: the production MLP now uses 9 inputs (`turb_mean`, `turb_std`, `turb_max`, `turb_min`, `turb_iqr`, `turb_skewness`, `turb_autocorr`, `turb_mad`, `waveform_length`), dropping `turb_kurtosis`, `turb_entropy`, and `turb_slope` after multi-seed long-recording sweeps showed better real-world behavior with the smaller set.
-- **ML topology widened after FP-first architecture sweep**: the production MLP hidden layers moved from `9 -> 24 -> 12 -> 1` to `9 -> 32 -> 16 -> 1` after a focused architecture campaign reduced median long-run FP (`506` vs `567`) while keeping paired validation pass count unchanged (`5/5`).
-- **Model and runtime chain re-aligned**: ML weights were retrained using Hampel-filtered input to keep train/deploy behavior consistent.
-- **Datasets recollected for all chips**: previous captures were replaced with new recordings under stricter quality controls (gain-locked, 128SC HT20-only, balanced baseline/motion ratios); the new dataset is used across the full pipeline — NBVI validation, MVS performance tests, and ML training.
-- **Validation quality controls tightened**: strict targets (`recall >95%`, `FP <5%`) were enforced for `test_mvs_default_subcarriers`.
-- **Collection and reporting consistency fixes**: interactive collector now drains queued packets with monotonic timing; dataset quality pair totals now use the same rounded ratio logic as per-pair checks.
+### Added
 
-### Security, CI, and tooling
+- **`examples/espectre-s3-touch-lcd.yaml`**: Waveshare-compatible ESP32-S3 Touch LCD 1.47" profile with on-device motion status.
+- **`./me detect`**: live host-side ML inference from the UDP CSI stream (replaces `tools/12_test_motion_stream.py`).
+- **CSI research notebooks**: `micro-espectre/notebooks/01_csi_data_explorer.ipynb`, `02_feature_extraction_and_ml.ipynb`.
 
-- **Governance and SAST**: moved contribution governance to DCO commit-signoff enforcement and kept a dedicated CodeQL workflow for C++/Python.
-- **Micro-ESPectre tooling hardening**: replaced insecure temporary-file usage, improved UDP bind safety with environment-aware host handling, and added `--bind-ip` to `./me collect`.
-- **Host-side live ML debug flow unified in `me`**: the standalone `micro-espectre/tools/12_test_motion_stream.py` utility was replaced by the new `./me detect` subcommand, which runs live ML motion inference from the UDP CSI stream while reading threshold, subcarriers, filters, and hit policy directly from `config.py` / `config_local.py`.
-- **CI reliability and maintainability**: QEMU smoke tests now handle known PHY emulator limits, restore ESP32 coverage, remove unsupported C6 matrix entries, and consolidate local test config paths.
-- **Permission and dependency hygiene**: workflows now declare explicit `contents: read` where required; Dependabot update grouping was tuned to reduce PR noise.
-- **Baseline versions and runtime tooling updated**: example/QEMU configs now require `min_version: 2026.2.0`; ESPHome was updated to `2026.3.0` with measured flash/heap/loop-time improvements.
+### Changed
 
-### Examples and documentation
+- **ESPHome baseline `2026.5.0`**; examples/QEMU now require `min_version: 2026.5.0`.
+- **Docs and config templates**: `ping` default traffic generator; `./me detect` documented alongside `stream` and `collect`.
+- **Removed `examples/uart/`**; optional `hardware_uart: UART0` documented for USB-UART bridge setups.
 
-- **Added**: `examples/espectre-s3-touch-lcd.yaml` for Waveshare-compatible 1.47" S3 boards.
-- **Added**: `micro-espectre/notebooks/01_csi_data_explorer.ipynb` and `micro-espectre/notebooks/02_feature_extraction_and_ml.ipynb`.
-- **Updated**: traffic-generator docs, examples, and Micro-ESPectre config templates now reflect `ping` as the default mode and document `dns` as the opt-in alternative.
-- **Updated**: Micro-ESPectre docs now describe `./me detect` as the supported entrypoint for live host-side ML inference and debugging alongside `stream` and `collect`.
-- **Removed/cleaned**: `examples/uart/`; documented optional `hardware_uart: UART0` usage in classic USB-UART bridge configurations.
+### Fixed
+
+- **Cross-stack real-data test pairing**: C++ harness matches Python by using full ISO timestamps with fractional seconds.
+- **Micro-ESPectre collector and dataset QA**: monotonic packet drain during interactive collect; consistent pair-ratio rounding in quality reports.
+- **Code scanning and collect tooling**: addressed reported alerts; safer temp files, UDP bind handling, and `--bind-ip` on `./me collect`.
+
+### CI and project maintenance
+
+- **DCO commit-signoff enforcement** and **CodeQL** workflow for C++ and Python.
+- **QEMU smoke tests stabilized**: PHY emulator limits handled, ESP32 coverage restored, unsupported C6 matrix entries removed.
+- **Workflow permissions and Dependabot grouping** tuned to reduce noise.
 
 ---
 
