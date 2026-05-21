@@ -13,10 +13,6 @@ License: GPLv3
 """
 import math
 
-try:
-    from src.utils import insertion_sort
-except ImportError:
-    from utils import insertion_sort
 
 
 def calc_skewness(values, count, mean, std):
@@ -102,15 +98,20 @@ def _interpolate_sorted_percentile(sorted_values, count, percentile):
     return lower * (1.0 - fraction) + upper * fraction
 
 
-def calc_iqr(turbulence_buffer, buffer_count):
-    """Calculate interquartile range (P75 - P25)."""
+def calc_iqr(turbulence_buffer, buffer_count, sorted_values=None):
+    """Calculate interquartile range (P75 - P25).
+    
+    Args:
+        sorted_values: Pre-sorted copy to avoid redundant sorting.
+    """
     if buffer_count < 2:
         return 0.0
 
-    sorted_vals = [0.0] * buffer_count
-    for i in range(buffer_count):
-        sorted_vals[i] = turbulence_buffer[i]
-    insertion_sort(sorted_vals, buffer_count)
+    if sorted_values is None:
+        sorted_vals = list(turbulence_buffer[:buffer_count])
+        sorted_vals.sort()
+    else:
+        sorted_vals = sorted_values
 
     q1 = _interpolate_sorted_percentile(sorted_vals, buffer_count, 25.0)
     q3 = _interpolate_sorted_percentile(sorted_vals, buffer_count, 75.0)
@@ -145,15 +146,20 @@ def calc_autocorrelation(turbulence_buffer, buffer_count, mean=None, variance=No
     return autocovariance / variance
 
 
-def calc_mad(turbulence_buffer, buffer_count):
-    """Calculate median absolute deviation (MAD)."""
+def calc_mad(turbulence_buffer, buffer_count, sorted_values=None):
+    """Calculate median absolute deviation (MAD).
+    
+    Args:
+        sorted_values: Pre-sorted copy to avoid redundant sorting.
+    """
     if buffer_count < 2:
         return 0.0
 
-    sorted_vals = [0.0] * buffer_count
-    for i in range(buffer_count):
-        sorted_vals[i] = turbulence_buffer[i]
-    insertion_sort(sorted_vals, buffer_count)
+    if sorted_values is None:
+        sorted_vals = list(turbulence_buffer[:buffer_count])
+        sorted_vals.sort()
+    else:
+        sorted_vals = sorted_values
 
     mid = buffer_count // 2
     if buffer_count % 2 == 0:
@@ -161,10 +167,8 @@ def calc_mad(turbulence_buffer, buffer_count):
     else:
         median = sorted_vals[mid]
 
-    abs_devs = [0.0] * buffer_count
-    for i in range(buffer_count):
-        abs_devs[i] = abs(turbulence_buffer[i] - median)
-    insertion_sort(abs_devs, buffer_count)
+    abs_devs = [abs(turbulence_buffer[i] - median) for i in range(buffer_count)]
+    abs_devs.sort()
 
     if buffer_count % 2 == 0:
         return (abs_devs[mid - 1] + abs_devs[mid]) / 2.0
@@ -200,51 +204,70 @@ def extract_features_by_name(turbulence_buffer, buffer_count, amplitudes=None, f
     if buffer_count < 2:
         return [0.0] * len(feature_names)
 
-    if hasattr(turbulence_buffer, '__iter__') and not isinstance(turbulence_buffer, list):
-        turb_list = list(turbulence_buffer)[:buffer_count]
+    if isinstance(turbulence_buffer, list):
+        turb_list = turbulence_buffer if len(turbulence_buffer) == buffer_count else turbulence_buffer[:buffer_count]
     else:
-        turb_list = turbulence_buffer[:buffer_count]
+        turb_list = list(turbulence_buffer)[:buffer_count]
 
     n = len(turb_list)
     if n < 2:
         return [0.0] * len(feature_names)
 
     turb_mean = sum(turb_list) / n
-    turb_var = sum((x - turb_mean) ** 2 for x in turb_list) / n
-    turb_std = math.sqrt(turb_var) if turb_var > 0 else 0.0
     turb_min = min(turb_list)
     turb_max = max(turb_list)
 
-    mean_i = (n - 1) / 2.0
-    numerator = 0.0
-    denominator = 0.0
+    var_sum = 0.0
     for i in range(n):
-        diff_i = i - mean_i
-        diff_x = turb_list[i] - turb_mean
-        numerator += diff_i * diff_x
-        denominator += diff_i * diff_i
-    turb_slope = numerator / denominator if denominator > 0 else 0.0
+        diff = turb_list[i] - turb_mean
+        var_sum += diff * diff
+    turb_var = var_sum / n
+    turb_std = math.sqrt(turb_var) if turb_var > 0 else 0.0
 
-    feature_calculators = {
-        'turb_mean': lambda: turb_mean,
-        'turb_std': lambda: turb_std,
-        'turb_max': lambda: turb_max,
-        'turb_min': lambda: turb_min,
-        'turb_iqr': lambda: calc_iqr(turb_list, n),
-        'turb_skewness': lambda: calc_skewness(turb_list, n, turb_mean, turb_std),
-        'turb_kurtosis': lambda: calc_kurtosis(turb_list, n, turb_mean, turb_std),
-        'turb_entropy': lambda: calc_entropy_turb(turb_list, n),
-        'turb_autocorr': lambda: calc_autocorrelation(turb_list, n, mean=turb_mean, variance=turb_var),
-        'turb_mad': lambda: calc_mad(turb_list, n),
-        'turb_slope': lambda: turb_slope,
-        'waveform_length': lambda: calc_waveform_length(turb_list, n),
-    }
+    # Sort once if any sort-dependent feature is requested (IQR, MAD).
+    _sorted = None
+    for name in feature_names:
+        if name == 'turb_iqr' or name == 'turb_mad':
+            _sorted = list(turb_list)
+            _sorted.sort()
+            break
 
+    # Build feature vector directly (avoids dict/lambda creation overhead).
     features = []
     for name in feature_names:
-        if name not in feature_calculators:
-            raise ValueError(f"Unknown feature: {name}. Available: {list(feature_calculators.keys())}")
-        features.append(feature_calculators[name]())
+        if name == 'turb_mean':
+            features.append(turb_mean)
+        elif name == 'turb_std':
+            features.append(turb_std)
+        elif name == 'turb_max':
+            features.append(turb_max)
+        elif name == 'turb_min':
+            features.append(turb_min)
+        elif name == 'turb_iqr':
+            features.append(calc_iqr(turb_list, n, sorted_values=_sorted))
+        elif name == 'turb_skewness':
+            features.append(calc_skewness(turb_list, n, turb_mean, turb_std))
+        elif name == 'turb_kurtosis':
+            features.append(calc_kurtosis(turb_list, n, turb_mean, turb_std))
+        elif name == 'turb_entropy':
+            features.append(calc_entropy_turb(turb_list, n))
+        elif name == 'turb_autocorr':
+            features.append(calc_autocorrelation(turb_list, n, mean=turb_mean, variance=turb_var))
+        elif name == 'turb_mad':
+            features.append(calc_mad(turb_list, n, sorted_values=_sorted))
+        elif name == 'turb_slope':
+            mean_i = (n - 1) / 2.0
+            num = 0.0
+            den = 0.0
+            for i in range(n):
+                di = i - mean_i
+                num += di * (turb_list[i] - turb_mean)
+                den += di * di
+            features.append(num / den if den > 0 else 0.0)
+        elif name == 'waveform_length':
+            features.append(calc_waveform_length(turb_list, n))
+        else:
+            raise ValueError(f"Unknown feature: {name}")
     return features
 
 
